@@ -1,0 +1,83 @@
+---
+title: "Crime Analysis"
+author: "A. Deleon"
+date: "2023-03-03"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+```{r,include=FALSE}
+library ("lubridate")
+library ("dplyr")
+library("tidyverse")
+library("ggplot2")
+library(geojsonio)
+library(sf)
+```
+
+First, we will analyze the occurrence of murders by year. This requires that we convert OCCUR_DATE field to date type and round to nearest month (here we Set this output to column "MONTHYR"). Next we convert "murder flag" to numeric so that it may be summarized. After we group by BORO,MONTHYR, and MURDERCOUNT. Finally, we sum murder counts and select the necessary columns.
+
+The graph below shows that murder was at its highest prior between 2006-2011. Recently, between 2019 to 2021, we have a seen a drastic up-tick in crime. This is likely due to COVID-19. According to this dataset, Staten Island has always had low counts of murder.
+
+```{r CrimeData}
+crimeData<-read_csv(file="https://raw.githubusercontent.com/AlDeleon012597/CrimeExploratoryAnalysis/main/NYPD_Shooting_Incident_Data__Historic_.csv",show_col_types = FALSE)
+
+
+crimeData_MurderSum<-crimeData %>%
+  mutate(crimeData, MONTHYR= year(floor_date(mdy(OCCUR_DATE),unit='year')),
+         STATISTICAL_MURDER_FLAG = as.numeric(ifelse(as.character(STATISTICAL_MURDER_FLAG) == "FALSE", "0", "1"))) %>% 
+  group_by(BORO,MONTHYR)  %>%  
+  summarize(MURDERCOUNT=sum(STATISTICAL_MURDER_FLAG))  %>%   
+  select (BORO,MONTHYR,MURDERCOUNT) %>%  
+  ungroup()
+ggplot(data = crimeData_MurderSum, aes(x = factor(MONTHYR), y = MURDERCOUNT, color = BORO)) +       
+  geom_line(aes(group = BORO)) + geom_point() +xlab("Year") +
+ylab("Number of Murders") +
+ggtitle("           Aggregated Murder Counts by Year in NYC ")
+```
+
+Next, we plot the average number of murders by months over the last 16 years. We see that most murders occur during the spring and summer months in the Bronx and in Brooklyn. We see this pattern slightly for Manhattan. Queens and Staten Island, however, remain fairly constant through the year.
+
+```{r}
+
+crimeData_MurderSum<-crimeData %>%
+  mutate(crimeData, MONTHYR= month(floor_date(mdy(OCCUR_DATE),unit='month'),label = TRUE, abbr = TRUE),
+         STATISTICAL_MURDER_FLAG = as.numeric(ifelse(as.character(STATISTICAL_MURDER_FLAG) == "FALSE", "0", "1"))) %>% 
+  group_by(BORO,MONTHYR)  %>%  
+  summarize(MURDERCOUNT=sum(STATISTICAL_MURDER_FLAG)/16)  %>%   
+  select (BORO,MONTHYR,MURDERCOUNT) %>%  
+  ungroup()
+
+ggplot(data = crimeData_MurderSum, aes(x = factor(MONTHYR), y = MURDERCOUNT, color = BORO)) +       
+  geom_line(aes(group = BORO)) + geom_point() +xlab("Month") +
+ylab("Average Number of Murders") +
+ggtitle("           Average Murder Counts by month in NYC (2006 to 2021) ")
+
+```
+
+
+In order to incorporate data from other sources in our model, a unit of analysis needed to be determined. I decided to go with Zip Code Tabulation Areas. This data is available at census.gov. Using the software QGIS, the murder incident points were aggregated by Zip Code Tabulation Area. 
+
+Unemployment rate and percent of individuals below poverty variables were extracted from census.gov using the api call:  
+
+https://api.census.gov/data/2020/acs/acs5?get=NAME,COUNTY,B06012_001E,B06012_002E&for=zip%20code%20tabulation%20area:* 
+
+This data was then joined to the Zip Code Tabulation Area shapefile and uploaded to github as a geojson.
+
+Simple linear regression was run using Unemployment rate and Below Poverty as our independent variables. The total number of murders by zipcode was used as a our dependent variable.
+
+The results from the simple linear regression model were not exceptional. Around 40% of the variance in our dependent variable was explained by the model. The p-value <0.05, suggesting some level of signficance in the model.
+```{r}
+nyc_zipCode<-"https://raw.githubusercontent.com/AlDeleon012597/CrimeExploratoryAnalysis/main/ZipCode_NYC_w_Data.geojson"
+nyc_zipCode<-st_as_sf(geojson_read(nyc_zipCode,what='sp'))
+model <- lm(MURD_CNTS ~ BELOW_POV + UNEMP, data = nyc_zipCode)
+summary(model)
+```
+```{r}
+plot(predict(model),nyc_zipCode$MURDER_CNTS,
+      xlab="predicted",ylab="actual")
+ abline(a=0,b=1)
+```
+
+Potential bias with this model: the model completely ignores the spatial-temporal relevance of the crime data. There needs to be some consideration for these two elements or at least research that may explain why one should exclude them from a model. Another bias with the model is my choice of dependent variables. I grew up in the Bronx--and given my experience in the Bronx--I *felt* as though the variables had some relevance to the number of murders in a particular community.    
